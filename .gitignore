@@ -1,0 +1,25 @@
+## [Build Outputs]
+DistTest/
+dist/
+build/
+
+## [Visual Studio]
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+## [Database / Data]
+config.json
+
+## [AI Agent / IDE]
+.antigravity/
+.cursor/
+.windsurf/
+
+## [OS generated files]
+Thumbs.db
+Desktop.ini
+
+## [Python]
+__pycache__/

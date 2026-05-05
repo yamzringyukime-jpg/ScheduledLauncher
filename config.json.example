@@ -1,0 +1,19 @@
+{
+  "task_name": "ScheduledLauncher",
+  "launch_time": "08:30",
+  "apps": [
+    {
+      "type": "url",
+      "target": "https://example.com",
+      "incognito": false,
+      "delay_seconds": 0
+    },
+    {
+      "type": "exe",
+      "target": "notepad.exe",
+      "delay_seconds": 5
+    }
+  ],
+  "calendar_disabled_dates": [],
+  "enabled": true
+}
