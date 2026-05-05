@@ -304,8 +304,24 @@ class LauncherApp:
         self.icon = pystray.Icon('ScheduledLauncher', image, 'ScheduledLauncher', menu)
         logger.info('タスクトレイアイコン作成完了')
 
+    def get_resource_path(self, relative_path):
+        """PyInstallerの一時フォルダ(MEIPASS)か、カレントディレクトリからパスを取得"""
+        import sys, os
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.join(sys._MEIPASS, relative_path)
+        return os.path.join(os.path.abspath(os.path.dirname(__file__)), relative_path)
+
     def create_icon_image(self):
-        """アイコン画像を生成 - 青色背景にSL（ScheduledLauncher）の文字"""
+        """アイコン画像を読み込み（失敗時は代替画像を生成）"""
+        try:
+            icon_path = self.get_resource_path('icon.ico')
+            import os
+            if os.path.exists(icon_path):
+                return Image.open(icon_path)
+        except Exception as e:
+            logger.warning(f"アイコン画像の読み込みに失敗しました: {e}")
+
+        # フォールバック処理: 青色背景にSL
         width = 64
         height = 64
         image = Image.new('RGB', (width, height), color=(0, 120, 215))
@@ -326,6 +342,10 @@ class LauncherApp:
         def run_settings():
             try:
                 root = tk.Tk()
+                try:
+                    root.iconbitmap(self.get_resource_path('icon.ico'))
+                except Exception as e:
+                    logger.warning(f"ウィンドウアイコンの設定に失敗しました: {e}")
                 root.title('ScheduledLauncher 設定')
                 root.geometry('600x500')
 
@@ -359,9 +379,12 @@ class LauncherApp:
 
                 # アプリリスト
                 ttk.Label(basic_frame, text='起動リスト:').grid(row=2, column=0, columnspan=2, sticky='w', pady=(10, 5))
+                # 遅延時間の仕様説明
+                ttk.Label(basic_frame, text='※「遅延（秒）」= そのアプリ起動後、次のアプリを開くまでの待ち時間',
+                          foreground='gray').grid(row=3, column=0, columnspan=2, sticky='w')
 
                 apps_frame = ttk.Frame(basic_frame)
-                apps_frame.grid(row=3, column=0, columnspan=2, sticky='nsew')
+                apps_frame.grid(row=4, column=0, columnspan=2, sticky='nsew')
 
                 apps_listbox = tk.Listbox(apps_frame, height=10)
                 apps_listbox.pack(side='left', fill='both', expand=True)
@@ -381,41 +404,42 @@ class LauncherApp:
 
                 refresh_apps()
 
-                # ボタン
-                btn_frame = ttk.Frame(basic_frame)
-                btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+                # --- アプリ追加/編集ダイアログ（共通） ---
+                def open_app_dialog(edit_index=None):
+                    """アプリの追加/編集ダイアログを開く。edit_indexが指定された場合は編集モード。"""
+                    is_edit = edit_index is not None
+                    existing = self.config_manager.config['apps'][edit_index] if is_edit else None
 
-                def add_app():
                     dialog = tk.Toplevel(root)
-                    dialog.title('アプリ追加')
+                    dialog.title('アプリ編集' if is_edit else 'アプリ追加')
                     dialog.geometry('400x350')
 
                     ttk.Label(dialog, text='タイプ:').pack(pady=5)
-                    type_var = tk.StringVar(value='url')
+                    type_var = tk.StringVar(value=existing['type'] if is_edit else 'url')
                     ttk.Radiobutton(dialog, text='URL', variable=type_var, value='url').pack()
                     ttk.Radiobutton(dialog, text='EXE/ファイル', variable=type_var, value='exe').pack()
 
                     ttk.Label(dialog, text='パス（EXE/ファイル）またはURL:').pack(pady=5)
-                    target_var = tk.StringVar()
+                    target_var = tk.StringVar(value=existing['target'] if is_edit else '')
                     ttk.Entry(dialog, textvariable=target_var).pack(fill='x', padx=20)
 
                     ttk.Label(dialog, text='遅延（秒）:').pack(pady=5)
-                    delay_var = tk.IntVar(value=0)
+                    delay_var = tk.IntVar(value=existing['delay_seconds'] if is_edit else 0)
                     ttk.Entry(dialog, textvariable=delay_var).pack()
 
                     # シークレットモード（URLのみ）
-                    incognito_var = tk.BooleanVar(value=False)
+                    incognito_var = tk.BooleanVar(value=existing.get('incognito', False) if is_edit else False)
                     incognito_check = ttk.Checkbutton(dialog, text='シークレットモード', variable=incognito_var)
                     incognito_check.pack(pady=5)
-                    
-                    # --- ブラウザ選択を追加 ---
+
+                    # ブラウザ選択
                     ttk.Label(dialog, text='使用ブラウザ:').pack(pady=5)
-                    browser_var = tk.StringVar(value='default')
+                    browser_var = tk.StringVar(value=existing.get('browser', 'default') if is_edit else 'default')
                     browser_combo = ttk.Combobox(dialog, textvariable=browser_var, state='readonly')
                     browser_combo['values'] = ('default', 'chrome', 'edge', 'firefox')
                     browser_combo.pack()
 
-                    # URLタイプ以外はブラウザ選択を無効化
+                    # URLタイプ以外はブラウザ選択・シークレットを無効化
                     def on_type_change(*args):
                         if type_var.get() == 'exe':
                             incognito_check.state(['disabled'])
@@ -423,11 +447,14 @@ class LauncherApp:
                         else:
                             incognito_check.state(['!disabled'])
                             browser_combo.state(['!disabled'])
-                    
+
                     type_var.trace('w', on_type_change)
+                    # 編集モード時は初期状態を即座に反映
+                    if is_edit:
+                        on_type_change()
 
                     def save_app():
-                        # 入力バリデーション
+                        """入力内容をバリデーションして保存"""
                         target = target_var.get().strip()
                         if not target:
                             messagebox.showerror('エラー', 'パス/URLを入力してください')
@@ -442,7 +469,7 @@ class LauncherApp:
                         if delay < 0:
                             messagebox.showerror('エラー', '遅延時間は0以上の値を入力してください')
                             return
-                        
+
                         app = {
                             'type': type_var.get(),
                             'target': target,
@@ -450,20 +477,93 @@ class LauncherApp:
                             'browser': browser_var.get() if type_var.get() == 'url' else 'default',
                             'incognito': incognito_var.get() if type_var.get() == 'url' else False
                         }
-                        self.config_manager.config['apps'].append(app)
+                        # 編集モード: 既存項目を上書き / 追加モード: リスト末尾に追加
+                        if is_edit:
+                            self.config_manager.config['apps'][edit_index] = app
+                        else:
+                            self.config_manager.config['apps'].append(app)
                         refresh_apps()
                         dialog.destroy()
 
-                    ttk.Button(dialog, text='追加', command=save_app).pack(pady=10)
+                    ttk.Button(dialog, text='保存' if is_edit else '追加', command=save_app).pack(pady=10)
 
+                # --- 編集（ダブルクリックでも可） ---
+                def edit_app(event=None):
+                    """選択中のアプリを編集ダイアログで開く"""
+                    selection = apps_listbox.curselection()
+                    if selection:
+                        open_app_dialog(edit_index=selection[0])
+
+                # --- 削除 ---
                 def remove_app():
+                    """選択中のアプリをリストから削除"""
                     selection = apps_listbox.curselection()
                     if selection:
                         del self.config_manager.config['apps'][selection[0]]
                         refresh_apps()
 
-                ttk.Button(btn_frame, text='追加', command=add_app).pack(side='left', padx=5)
+                # --- 並べ替え（▲▼ボタン） ---
+                def move_up():
+                    """選択中のアプリを1つ上に移動"""
+                    selection = apps_listbox.curselection()
+                    if selection and selection[0] > 0:
+                        idx = selection[0]
+                        apps = self.config_manager.config['apps']
+                        apps[idx], apps[idx - 1] = apps[idx - 1], apps[idx]
+                        refresh_apps()
+                        apps_listbox.selection_set(idx - 1)
+
+                def move_down():
+                    """選択中のアプリを1つ下に移動"""
+                    selection = apps_listbox.curselection()
+                    if selection and selection[0] < apps_listbox.size() - 1:
+                        idx = selection[0]
+                        apps = self.config_manager.config['apps']
+                        apps[idx], apps[idx + 1] = apps[idx + 1], apps[idx]
+                        refresh_apps()
+                        apps_listbox.selection_set(idx + 1)
+
+                # --- ドラッグ＆ドロップによる並べ替え ---
+                drag_data = {'index': None}
+
+                def on_drag_start(event):
+                    """ドラッグ開始 - クリックされたアイテムのインデックスを記録"""
+                    index = apps_listbox.nearest(event.y)
+                    if 0 <= index < apps_listbox.size():
+                        drag_data['index'] = index
+
+                def on_drag_motion(event):
+                    """ドラッグ中 - マウス位置に応じてアイテムを入れ替え"""
+                    if drag_data['index'] is None:
+                        return
+                    current_index = apps_listbox.nearest(event.y)
+                    if current_index != drag_data['index'] and 0 <= current_index < apps_listbox.size():
+                        apps = self.config_manager.config['apps']
+                        apps.insert(current_index, apps.pop(drag_data['index']))
+                        drag_data['index'] = current_index
+                        refresh_apps()
+                        apps_listbox.selection_set(current_index)
+
+                def on_drag_end(event):
+                    """ドラッグ終了 - 状態をリセット"""
+                    drag_data['index'] = None
+
+                apps_listbox.bind('<Button-1>', on_drag_start)
+                apps_listbox.bind('<B1-Motion>', on_drag_motion)
+                apps_listbox.bind('<ButtonRelease-1>', on_drag_end)
+                # ダブルクリックで編集ダイアログを開く
+                apps_listbox.bind('<Double-Button-1>', edit_app)
+
+                # ボタンフレーム
+                btn_frame = ttk.Frame(basic_frame)
+                btn_frame.grid(row=5, column=0, columnspan=2, pady=10)
+
+                ttk.Button(btn_frame, text='追加', command=lambda: open_app_dialog()).pack(side='left', padx=5)
+                ttk.Button(btn_frame, text='編集', command=edit_app).pack(side='left', padx=5)
                 ttk.Button(btn_frame, text='削除', command=remove_app).pack(side='left', padx=5)
+                ttk.Label(btn_frame, text='  ').pack(side='left')  # スペーサー
+                ttk.Button(btn_frame, text='▲', command=move_up, width=3).pack(side='left', padx=2)
+                ttk.Button(btn_frame, text='▼', command=move_down, width=3).pack(side='left', padx=2)
 
                 # カレンダー設定タブ
                 calendar_frame = ttk.Frame(notebook, padding=10)
@@ -579,6 +679,57 @@ class LauncherApp:
                 tk.Label(legend_frame, text=' 土曜 ', fg='blue', bg='white').pack(side='left')
                 tk.Label(legend_frame, text=' 日曜 ', fg='red', bg='white').pack(side='left')
                 tk.Label(legend_frame, text=' 休日(OFF) ', fg='black', bg='#e0e0e0').pack(side='left')
+
+                # --- 曜日一括ON/OFFボタン ---
+                weekday_frame = ttk.Frame(calendar_frame)
+                weekday_frame.pack(fill='x', pady=5)
+                ttk.Label(weekday_frame, text='曜日一括:').pack(side='left', padx=5)
+
+                weekday_names = ['月', '火', '水', '木', '金', '土', '日']
+
+                def toggle_weekday(weekday_index):
+                    """指定曜日の表示月全日付を一括ON/OFF切り替え
+                    ONの日が1つでもあれば全てOFF、全てOFFなら全てONにする"""
+                    month, year = cal.get_displayed_month()
+
+                    # 表示中の月のその曜日の全日付を収集
+                    target_dates = []
+                    for d in range(1, 32):
+                        try:
+                            date = datetime(year, month, d).date()
+                            if date.weekday() == weekday_index:
+                                target_dates.append(date.strftime('%Y-%m-%d'))
+                        except ValueError:
+                            break  # その月の日数を超えたら終了
+
+                    # トグル判定: ONの日（disabled_datesに含まれない日）が1つでもあれば全OFF
+                    any_on = any(d not in disabled_dates for d in target_dates)
+
+                    if any_on:
+                        # 全てOFFにする（disabled_datesに追加）
+                        for d in target_dates:
+                            if d not in disabled_dates:
+                                disabled_dates.append(d)
+                    else:
+                        # 全てONにする（disabled_datesから削除）
+                        for d in target_dates:
+                            if d in disabled_dates:
+                                disabled_dates.remove(d)
+
+                    update_calendar_tags()
+
+                # 曜日ボタンを生成（土=青、日=赤で視覚的に区別）
+                for i, name in enumerate(weekday_names):
+                    if i == 5:  # 土曜
+                        btn = tk.Button(weekday_frame, text=name, width=3, fg='blue',
+                                        command=lambda idx=i: toggle_weekday(idx))
+                    elif i == 6:  # 日曜
+                        btn = tk.Button(weekday_frame, text=name, width=3, fg='red',
+                                        command=lambda idx=i: toggle_weekday(idx))
+                    else:
+                        btn = ttk.Button(weekday_frame, text=name, width=3,
+                                         command=lambda idx=i: toggle_weekday(idx))
+                    btn.pack(side='left', padx=2)
 
                 # 保存ボタン
                 def save_settings():
